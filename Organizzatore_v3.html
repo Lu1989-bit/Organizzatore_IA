@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#020204">
+    <title>NEXUS OS // NEURO-TASKER</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap');
+        :root { --neon: #00f2ff; --bg: #020204; --panel: rgba(10, 10, 15, 0.9); }
+        body { background: var(--bg); color: var(--neon); font-family: 'JetBrains Mono', monospace; -webkit-tap-highlight-color: transparent; }
+        .cyber-grid { background-image: linear-gradient(var(--neon) 0.5px, transparent 0.5px), linear-gradient(90deg, var(--neon) 0.5px, transparent 0.5px); background-size: 40px 40px; opacity: 0.05; position: fixed; inset: 0; pointer-events: none; }
+        .neon-border { border: 1px solid rgba(0, 242, 255, 0.2); box-shadow: 0 0 15px rgba(0, 242, 255, 0.05); }
+        .glass { backdrop-filter: blur(12px); background: var(--panel); }
+        .task-enter { animation: slideIn 0.3s ease-out forwards; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        window.FB = { initializeApp, getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getAuth, signInAnonymously, onAuthStateChanged };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+        const { Mic, MicOff, Trash2, CheckCircle2, Circle, Cpu, Calendar, Search, Settings, ShieldAlert, Key, Download, ChevronRight, ListTree } = lucide;
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'nexus-pwa-v3';
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [tasks, setTasks] = useState([]);
+            const [isRecording, setIsRecording] = useState(false);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [transcript, setTranscript] = useState("");
+            const [search, setSearch] = useState("");
+            const [apiKey, setApiKey] = useState(localStorage.getItem('nexus_key') || "");
+            const [showSettings, setShowSettings] = useState(!localStorage.getItem('nexus_key'));
+            const [expandedTask, setExpandedTask] = useState(null);
+            const [error, setError] = useState(null);
+            const recognitionRef = useRef(null);
+
+            const { initializeApp, getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getAuth, signInAnonymously, onAuthStateChanged } = window.FB;
+            const app = initializeApp(firebaseConfig);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+
+            // Audio Synthesis (TTS)
+            const speak = (text) => {
+                if (!('speechSynthesis' in window)) return;
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'it-IT';
+                utterance.pitch = 0.6; // Suono più profondo/robotico
+                utterance.rate = 1.2;
+                window.speechSynthesis.speak(utterance);
+            };
+
+            useEffect(() => {
+                signInAnonymously(auth);
+                const unsub = onAuthStateChanged(auth, setUser);
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const tasksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
+                return onSnapshot(tasksRef, (snap) => {
+                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setTasks(data.sort((a,b) => new Date(a.date) - new Date(b.date)));
+                });
+            }, [user]);
+
+            useEffect(() => {
+                const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (Speech) {
+                    recognitionRef.current = new Speech();
+                    recognitionRef.current.continuous = true;
+                    recognitionRef.current.interimResults = true;
+                    recognitionRef.current.lang = 'it-IT';
+                    recognitionRef.current.onresult = (e) => {
+                        let text = "";
+                        for (let i = e.resultIndex; i < e.results.length; i++) text += e.results[i][0].transcript;
+                        setTranscript(text);
+                    };
+                }
+            }, []);
+
+            const processAI = async (text) => {
+                if (!apiKey) { setError("CHIAVE API MANCANTE."); return; }
+                setIsProcessing(true);
+                speak("Analisi neurale in corso.");
+                
+                // Prompt avanzato: richiede anche sub-tasks
+                const prompt = `Analizza: "${text}". Estrai task. Data oggi: ${new Date().toISOString().split('T')[0]}. 
+                Se il task è complesso, genera 2-4 sub-task logici.
+                Output JSON: [{"title": "...", "date": "YYYY-MM-DD", "priority": "high/medium/low", "subtasks": ["step 1", "step 2"]}]`;
+                
+                try {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+                    });
+                    const data = await res.json();
+                    const items = JSON.parse(data.candidates[0].content.parts[0].text);
+                    for (const item of items) {
+                        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', crypto.randomUUID()), { 
+                            ...item, completed: false, created: serverTimestamp() 
+                        });
+                    }
+                    speak(`Acquisizione completata. ${items.length} nodi aggiunti.`);
+                } catch (e) { 
+                    setError("ERRORE NEURALE. Riprova.");
+                    speak("Errore di acquisizione neurale.");
+                }
+                finally { setIsProcessing(false); setTranscript(""); }
+            };
+
+            const toggleRec = () => {
+                if (isRecording) {
+                    setIsRecording(false);
+                    recognitionRef.current?.stop();
+                    if (transcript.trim()) processAI(transcript);
+                } else {
+                    setTranscript(""); setError(null); setIsRecording(true);
+                    recognitionRef.current?.start();
+                    speak("In ascolto.");
+                }
+            };
+
+            // EXODUS PROTOCOL: Scarica i dati in JSON
+            const triggerExodus = () => {
+                const dataStr = JSON.stringify(tasks, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `nexus_exodus_backup_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                speak("Protocollo Exodus avviato. Download dati completato.");
+            };
+
+            const grouped = useMemo(() => {
+                const groups = {};
+                tasks.filter(t => t.title.toLowerCase().includes(search.toLowerCase())).forEach(t => {
+                    if (!groups[t.date]) groups[t.date] = [];
+                    groups[t.date].push(t);
+                });
+                return groups;
+            }, [tasks, search]);
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 max-w-4xl mx-auto pb-24">
+                    <div className="cyber-grid"></div>
+                    
+                    <header className="flex justify-between items-center mb-8 border-b border-cyan-950 pb-6 relative z-10">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 border border-cyan-500/30 rounded shadow-[0_0_10px_rgba(0,242,255,0.1)]">
+                                <Cpu className="w-6 h-6 animate-pulse text-cyan-400" />
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-black tracking-tighter text-white uppercase italic">Nexus<span className="text-cyan-400">OS</span></h1>
+                                <p className="text-[8px] font-bold text-cyan-800 tracking-[0.3em]">VERSION 3.0 // NEURAL SYNC</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={triggerExodus} className="p-2 glass neon-border rounded-full hover:bg-cyan-500/10" title="Exodus Data Export">
+                                <Download size={18} className="text-cyan-600" />
+                            </button>
+                            <button onClick={() => setShowSettings(!showSettings)} className="p-2 glass neon-border rounded-full hover:bg-cyan-500/10">
+                                <Settings size={18} className={apiKey ? "text-cyan-600" : "text-red-500 animate-bounce"} />
+                            </button>
+                        </div>
+                    </header>
+
+                    {showSettings && (
+                        <div className="mb-8 p-6 glass neon-border rounded-lg task-enter">
+                            <h3 className="text-xs font-black mb-4 flex items-center gap-2"><Key size={14}/> NEURAL ACCESS KEY</h3>
+                            <input 
+                                type="password" 
+                                value={apiKey}
+                                onChange={(e) => { setApiKey(e.target.value); localStorage.setItem('nexus_key', e.target.value); }}
+                                placeholder="Incolla API Key Gemini..."
+                                className="w-full bg-black/50 border border-cyan-900 rounded p-3 text-xs focus:border-cyan-400 focus:outline-none"
+                            />
+                        </div>
+                    )}
+
+                    <div className="flex flex-col gap-4 mb-8 relative z-10">
+                        <div className="relative group">
+                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-900" />
+                            <input type="text" placeholder="FILTRA MATRIX..." value={search} onChange={e => setSearch(e.target.value)} className="w-full glass neon-border rounded-lg py-4 pl-12 pr-4 text-xs focus:border-cyan-400 focus:outline-none" />
+                        </div>
+                    </div>
+
+                    {transcript && isRecording && (
+                        <div className="mb-8 text-center animate-pulse p-4 glass neon-border rounded-lg">
+                            <p className="text-cyan-400 text-xs italic">" {transcript} "</p>
+                        </div>
+                    )}
+
+                    {error && (
+                        <div className="mb-6 p-4 glass border border-red-900 rounded-lg text-red-500 text-[10px] font-bold flex items-center gap-3">
+                            <ShieldAlert size={16}/> {error}
+                        </div>
+                    )}
+
+                    <div className="space-y-12">
+                        {Object.entries(grouped).map(([date, items]) => (
+                            <div key={date} className="task-enter">
+                                <div className="flex items-center gap-3 mb-4">
+                                    <Calendar size={14} className="text-cyan-800" />
+                                    <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-cyan-700">
+                                        {new Date(date).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })}
+                                    </h2>
+                                    <div className="h-px flex-1 bg-cyan-950/50"></div>
+                                </div>
+                                <div className="grid gap-3">
+                                    {items.map(t => (
+                                        <div key={t.id} className="group glass neon-border rounded transition-all">
+                                            <div className="flex items-center justify-between p-4">
+                                                <div className="flex items-center gap-4 flex-1">
+                                                    <button onClick={() => updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', t.id), {completed: !t.completed})}>
+                                                        {t.completed ? <CheckCircle2 size={20} className="text-cyan-600"/> : <Circle size={20} className="text-cyan-900 group-hover:text-cyan-400"/>}
+                                                    </button>
+                                                    <div className="flex-1 cursor-pointer" onClick={() => t.subtasks?.length && setExpandedTask(expandedTask === t.id ? null : t.id)}>
+                                                        <div className={`text-sm font-bold flex items-center gap-2 ${t.completed ? 'line-through text-cyan-900' : 'text-white'}`}>
+                                                            {t.title} 
+                                                            {t.subtasks?.length > 0 && <ListTree size={14} className="text-cyan-700" />}
+                                                        </div>
+                                                        <div className={`text-[8px] font-black px-1.5 py-0.5 mt-1 inline-block rounded ${t.priority === 'high' ? 'bg-red-600 text-white' : 'bg-cyan-950 text-cyan-600'}`}>
+                                                            {t.priority.toUpperCase()} PRTY
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', t.id))} className="text-red-900 hover:text-red-500 p-2">
+                                                    <Trash2 size={16}/>
+                                                </button>
+                                            </div>
+                                            
+                                            {/* Subtasks Espandibili */}
+                                            {t.subtasks && t.subtasks.length > 0 && expandedTask === t.id && (
+                                                <div className="px-12 pb-4 pt-1 bg-black/40 border-t border-cyan-900/30">
+                                                    {t.subtasks.map((sub, i) => (
+                                                        <div key={i} className="flex items-center gap-2 text-xs text-cyan-600 py-1">
+                                                            <ChevronRight size={12} /> {sub}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Floating Rec Button */}
+                    <button 
+                        onClick={toggleRec}
+                        className={`fixed bottom-8 left-1/2 -translate-x-1/2 flex items-center justify-center gap-3 px-8 py-4 rounded-full font-black text-xs tracking-widest transition-all z-50 ${
+                            isRecording ? 'bg-red-600 text-white shadow-[0_0_40px_rgba(220,38,38,0.8)] animate-pulse' : 'bg-cyan-500 text-black shadow-[0_0_20px_rgba(0,242,255,0.4)]'
+                        }`}
+                    >
+                        {isRecording ? <MicOff size={18}/> : <Mic size={18}/>}
+                        {isRecording ? 'STOP' : 'LINK VOCALE'}
+                    </button>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
