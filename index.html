@@ -4,13 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     
+    <!-- PWA & Mobile Optimization -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="NexusOS">
     <meta name="display" content="standalone">
     
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' style='stop-color:%2300f2ff;stop-opacity:1'/><stop offset='100%25' style='stop-color:%23ff0055;stop-opacity:1'/></linearGradient></defs><rect width='100' height='100' rx='25' fill='%23020204'/><path d='M30 50 Q50 20 70 50 T30 50' fill='none' stroke='url(%23g)' stroke-width='4' stroke-linecap='round'/><circle cx='50' cy='50' r='8' fill='%2300f2ff'/></svg>">
+    <!-- App Icon Pro (Neural Clock Logo) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' style='stop-color:%2300f2ff;stop-opacity:1'/><stop offset='100%25' style='stop-color:%23ff0055;stop-opacity:1'/></linearGradient></defs><rect width='100' height='100' rx='25' fill='%23020204'/><path d='M30 50 Q50 20 70 50 T30 50' fill='none' stroke='url(%23g)' stroke-width='4' stroke-linecap='round'><animateTransform attributeName='transform' type='rotate' from='0 50 50' to='360 50 50' dur='15s' repeatCount='indefinite'/></path><circle cx='50' cy='50' r='10' fill='%2300f2ff'><animate attributeName='r' values='8;11;8' dur='2s' repeatCount='indefinite'/></circle></svg>">
     
     <meta name="theme-color" content="#020204">
     <title>NEXUS OS // CHRONO-SHADOW</title>
@@ -28,6 +30,7 @@
         body { 
             background: var(--bg); color: var(--neon); font-family: 'JetBrains Mono', monospace; 
             margin: 0; overflow: hidden; height: 100vh; width: 100vw; position: fixed;
+            user-select: none; -webkit-tap-highlight-color: transparent;
         }
         
         .cyber-grid {
@@ -35,11 +38,22 @@
             background-size: 40px 40px; opacity: 0.05; position: fixed; inset: 0; pointer-events: none;
         }
 
-        .glass-card { background: var(--panel); backdrop-filter: blur(20px); border: 1px solid rgba(0, 242, 255, 0.1); }
-        .active-mic { background: var(--alert) !important; box-shadow: 0 0 30px var(--alert); }
+        .glass-card { background: var(--panel); backdrop-filter: blur(25px); border: 1px solid rgba(0, 242, 255, 0.1); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8); }
+        .alert-card { border-color: var(--alert); box-shadow: 0 0 20px rgba(255, 0, 85, 0.1); background: rgba(20, 0, 5, 0.95); }
         
-        @keyframes scanline { 0% { top: 0; } 100% { top: 100%; } }
-        .scanline { position: absolute; width: 100%; height: 2px; background: rgba(0, 242, 255, 0.1); animation: scanline 4s linear infinite; pointer-events: none; }
+        @keyframes pulse-neon { 0%, 100% { box-shadow: 0 0 10px rgba(0, 242, 255, 0.2); } 50% { box-shadow: 0 0 30px rgba(0, 242, 255, 0.5); } }
+        .active-mic { background: var(--alert) !important; animation: pulse-neon 1.5s infinite; }
+        
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: var(--neon); border-radius: 10px; }
+
+        html, body { height: 100%; width: 100%; position: fixed; top: 0; left: 0; }
+        #root { height: 100%; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); }
+
+        .progress-ring { transition: stroke-dashoffset 0.35s; transform: rotate(-90deg); transform-origin: 50% 50%; }
     </style>
 </head>
 <body>
@@ -59,7 +73,7 @@
             return <span ref={ref} style={{ display: 'contents' }} />;
         };
 
-        const DB_NAME = "NexusLocalDB_v8";
+        const DB_NAME = "NexusLocalDB_v9";
         const STORE_NAME = "tasks";
 
         const App = () => {
@@ -68,12 +82,16 @@
             const [recording, setRecording] = useState(false);
             const [processing, setProcessing] = useState(false);
             const [transcript, setTranscript] = useState("");
-            const [apiKey, setApiKey] = useState(localStorage.getItem('NEXUS_KEY') || "");
-            const [apiProvider, setApiProvider] = useState(localStorage.getItem('NEXUS_PROVIDER') || "gemini");
-            const [tempKey, setTempKey] = useState(localStorage.getItem('NEXUS_KEY') || "");
+            const [search, setSearch] = useState("");
             const [settings, setSettings] = useState(false);
             const [error, setError] = useState(null);
-            
+            const [view, setView] = useState("active"); // "active" or "history"
+
+            // Key persistence: Separate keys for Gemini and Groq
+            const [geminiKey, setGeminiKey] = useState(localStorage.getItem('NEXUS_KEY_GEMINI') || "");
+            const [groqKey, setGroqKey] = useState(localStorage.getItem('NEXUS_KEY_GROQ') || "");
+            const [apiProvider, setApiProvider] = useState(localStorage.getItem('NEXUS_PROVIDER') || "gemini");
+
             const dbRef = useRef(null);
             const recognitionRef = useRef(null);
 
@@ -81,7 +99,7 @@
                 if (!window.speechSynthesis) return;
                 window.speechSynthesis.cancel();
                 const u = new SpeechSynthesisUtterance(msg);
-                u.lang = 'it-IT'; u.pitch = 0.8; u.rate = 1.2;
+                u.lang = 'it-IT'; u.pitch = 0.9; u.rate = 1.1;
                 window.speechSynthesis.speak(u);
             };
 
@@ -92,7 +110,7 @@
                     req.onsuccess = (e) => {
                         dbRef.current = e.target.result;
                         refreshTasks();
-                        setBooting(false);
+                        setTimeout(() => setBooting(false), 1000);
                     };
                 };
                 init();
@@ -119,18 +137,13 @@
 
             const addTask = async (data) => {
                 const tx = dbRef.current.transaction(STORE_NAME, "readwrite");
-                tx.objectStore(STORE_NAME).put({ 
-                    ...data, 
-                    id: crypto.randomUUID(), 
-                    completed: false, 
-                    created: Date.now() 
-                });
+                tx.objectStore(STORE_NAME).put({ ...data, id: crypto.randomUUID(), completed: false, created: Date.now() });
                 tx.oncomplete = refreshTasks;
             };
 
             const toggleTask = async (t) => {
                 const tx = dbRef.current.transaction(STORE_NAME, "readwrite");
-                tx.objectStore(STORE_NAME).put({ ...t, completed: !t.completed });
+                tx.objectStore(STORE_NAME).put({ ...t, completed: !t.completed, completedAt: !t.completed ? Date.now() : null });
                 tx.oncomplete = refreshTasks;
             };
 
@@ -141,54 +154,48 @@
             };
 
             const processAI = async (text) => {
-                const key = localStorage.getItem('NEXUS_KEY');
-                const provider = localStorage.getItem('NEXUS_PROVIDER') || "gemini";
-                
-                if (!key) { speak("Configurazione mancante."); setSettings(true); return; }
+                const currentKey = apiProvider === "gemini" ? geminiKey : groqKey;
+                if (!currentKey) { speak("Inserire chiave API."); setSettings(true); return; }
                 
                 setProcessing(true);
                 setError(null);
                 speak("Analisi neurale.");
 
                 try {
-                    let response, items;
-
-                    if (provider === "gemini") {
-                        // FIX: Endpoint Gemini v1beta stabile
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
-                        response = await fetch(url, {
+                    let items = [];
+                    if (apiProvider === "gemini") {
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${currentKey}`;
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                contents: [{ parts: [{ text: `Data oggi: ${new Date().toISOString().split('T')[0]}. Estrai task da: "${text}". Rispondi SOLO con array JSON: [{"title":string, "date":"YYYY-MM-DD", "priority":"high"|"med"|"low", "estimatedMinutes":number}]` }] }],
+                                contents: [{ parts: [{ text: `Oggi: ${new Date().toISOString().split('T')[0]}. Estrai task da: "${text}". Rispondi SOLO con array JSON: [{"title":string, "date":"YYYY-MM-DD", "priority":"high"|"med"|"low", "estimatedMinutes":number}]` }] }],
                                 generationConfig: { responseMimeType: "application/json" }
                             })
                         });
-                        
-                        if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(`Gemini ${response.status}: ${errData.error?.message || 'Errore Ignoto'}`);
-                        }
-                        const result = await response.json();
+                        if (!res.ok) throw new Error(`Gemini Error ${res.status}`);
+                        const result = await res.json();
                         items = JSON.parse(result.candidates[0].content.parts[0].text || "[]");
                     } else {
-                        // Opzione Groq (Rock/Alternative)
-                        response = await fetch(`https://api.groq.com/openai/v1/chat/completions`, {
+                        const res = await fetch(`https://api.groq.com/openai/v1/chat/completions`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentKey}` },
                             body: JSON.stringify({
                                 model: "llama-3.3-70b-versatile",
-                                messages: [{ role: "system", content: "Sei un estrattore di task JSON. Rispondi solo con l'array." }, { role: "user", content: `Data oggi: ${new Date().toISOString().split('T')[0]}. Estrai task: "${text}". Formato: [{"title":string, "date":"YYYY-MM-DD", "priority":"high"|"med"|"low", "estimatedMinutes":number}]` }],
+                                messages: [
+                                    { role: "system", content: "Extract tasks as JSON array only. Format: [{\"title\":string, \"date\":\"YYYY-MM-DD\", \"priority\":\"high\"|\"med\"|\"low\", \"estimatedMinutes\":number}]" },
+                                    { role: "user", content: `Today: ${new Date().toISOString().split('T')[0]}. Input: "${text}"` }
+                                ],
                                 response_format: { type: "json_object" }
                             })
                         });
-                        if (!response.ok) throw new Error(`Groq Error ${response.status}`);
-                        const result = await response.json();
+                        if (!res.ok) throw new Error(`Groq Error ${res.status}`);
+                        const result = await res.json();
                         const parsed = JSON.parse(result.choices[0].message.content);
                         items = parsed.tasks || Object.values(parsed)[0];
                     }
                     
-                    if (!Array.isArray(items)) throw new Error("Formato risposta non valido.");
+                    if (!Array.isArray(items)) throw new Error("Risposta non valida.");
                     for (const item of items) await addTask(item);
                     speak("Matrice aggiornata.");
                     setTranscript("");
@@ -214,10 +221,21 @@
                 const active = tasks.filter(t => t.date === today && !t.completed);
                 const total = active.reduce((acc, t) => acc + (t.estimatedMinutes || 30), 0);
                 const remaining = Math.max(0, Math.floor((new Date().setHours(23,0,0,0) - Date.now()) / 60000));
-                return { total, overload: total > remaining, finish: new Date(Date.now() + total * 60000) };
+                const capacityPercent = Math.min(100, (total / 480) * 100); // 8 ore base
+                return { total, overload: total > remaining, finish: new Date(Date.now() + total * 60000), percent: capacityPercent };
             }, [tasks]);
 
-            if (booting) return <div className="fixed inset-0 bg-black flex items-center justify-center text-cyan-400 font-black tracking-widest animate-pulse">NEXUS_BOOTING...</div>;
+            const filteredTasks = useMemo(() => {
+                const list = view === "active" ? tasks.filter(t => !t.completed) : tasks.filter(t => t.completed);
+                return list.filter(t => t.title.toLowerCase().includes(search.toLowerCase()));
+            }, [tasks, view, search]);
+
+            if (booting) return (
+                <div className="fixed inset-0 bg-black flex flex-col items-center justify-center text-cyan-500 font-black tracking-widest animate-pulse">
+                    <Icon name="zap" size={40} className="mb-4" />
+                    NEXUS_OS_INIT...
+                </div>
+            );
 
             return (
                 <div className="flex-1 flex flex-col p-4 md:p-8 h-full relative overflow-hidden">
@@ -226,26 +244,44 @@
                     <header className="flex justify-between items-center mb-6 border-b border-cyan-950 pb-4 relative z-10 shrink-0">
                         <div className="flex items-center gap-3">
                             <Icon name="zap" className="text-cyan-400" />
-                            <h1 className="text-xl font-black italic text-white tracking-tighter uppercase">Nexus<span className="text-cyan-400">OS</span></h1>
+                            <div>
+                                <h1 className="text-xl font-black italic text-white tracking-tighter uppercase leading-none">Nexus<span className="text-cyan-400">OS</span></h1>
+                                <div className="text-[6px] text-cyan-800 font-bold uppercase tracking-[0.4em]">Shadow v9.1 // PWA</div>
+                            </div>
                         </div>
-                        <button onClick={() => setSettings(!settings)} className={`p-2 glass-card rounded-lg ${settings ? 'text-white border-cyan-400' : 'text-cyan-800'}`}>
-                            <Icon name="settings" />
-                        </button>
+                        <div className="flex gap-2">
+                            <button onClick={() => setView(view === "active" ? "history" : "active")} className={`p-2 glass-card rounded-lg transition-all ${view === "history" ? 'text-cyan-400 border-cyan-400 shadow-neon' : 'text-cyan-800'}`}>
+                                <Icon name={view === "history" ? "clock-rewind" : "history"} />
+                            </button>
+                            <button onClick={() => setSettings(!settings)} className={`p-2 glass-card rounded-lg transition-all ${settings ? 'text-white border-cyan-400 shadow-neon' : 'text-cyan-800'}`}>
+                                <Icon name="settings" />
+                            </button>
+                        </div>
                     </header>
 
                     {settings && (
                         <div className="mb-6 glass-card p-5 rounded-xl border-l-2 border-cyan-500 fade-in z-20">
-                            <div className="text-[8px] font-black uppercase text-cyan-800 mb-3 tracking-widest">Configurazione Mainframe</div>
+                            <div className="text-[8px] font-black uppercase text-cyan-800 mb-4 tracking-widest flex justify-between">
+                                <span>Configurazione Mainframe</span>
+                                <span className="text-cyan-500">Persistenza Attiva</span>
+                            </div>
                             
                             <div className="flex gap-2 mb-4">
-                                <button onClick={() => { setApiProvider("gemini"); localStorage.setItem('NEXUS_PROVIDER', "gemini"); }} className={`flex-1 py-2 text-[10px] font-bold border ${apiProvider === 'gemini' ? 'bg-cyan-500 text-black border-cyan-500' : 'border-cyan-900 text-cyan-800'}`}>GEMINI</button>
-                                <button onClick={() => { setApiProvider("groq"); localStorage.setItem('NEXUS_PROVIDER', "groq"); }} className={`flex-1 py-2 text-[10px] font-bold border ${apiProvider === 'groq' ? 'bg-cyan-500 text-black border-cyan-500' : 'border-cyan-900 text-cyan-800'}`}>GROQ (ROCK)</button>
+                                <button onClick={() => { setApiProvider("gemini"); localStorage.setItem('NEXUS_PROVIDER', "gemini"); }} className={`flex-1 py-2 text-[10px] font-bold border rounded ${apiProvider === 'gemini' ? 'bg-cyan-500 text-black border-cyan-500 shadow-neon' : 'border-cyan-900 text-cyan-800'}`}>GEMINI</button>
+                                <button onClick={() => { setApiProvider("groq"); localStorage.setItem('NEXUS_PROVIDER', "groq"); }} className={`flex-1 py-2 text-[10px] font-bold border rounded ${apiProvider === 'groq' ? 'bg-cyan-500 text-black border-cyan-500 shadow-neon' : 'border-cyan-900 text-cyan-800'}`}>GROQ</button>
                             </div>
 
-                            <div className="flex gap-2">
-                                <input type="password" value={tempKey} onChange={e => setTempKey(e.target.value)} className="flex-1 bg-black/50 border border-cyan-900 rounded-lg p-3 text-xs outline-none text-white focus:border-cyan-400" placeholder={`Inserisci chiave ${apiProvider.toUpperCase()}...`} />
-                                <button onClick={() => { localStorage.setItem('NEXUS_KEY', tempKey); setApiKey(tempKey); setSettings(false); speak("Link stabilito."); }} className="bg-cyan-500 text-black px-4 rounded-lg font-black text-[10px] uppercase">LINK</button>
+                            <div className="space-y-3">
+                                <div className="flex flex-col">
+                                    <span className="text-[7px] text-cyan-700 mb-1">GEMINI KEY</span>
+                                    <input type="password" value={geminiKey} onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('NEXUS_KEY_GEMINI', e.target.value); }} className="bg-black/50 border border-cyan-900 rounded p-2 text-xs outline-none text-white focus:border-cyan-400" placeholder="Inserisci..." />
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-[7px] text-cyan-700 mb-1">GROQ KEY</span>
+                                    <input type="password" value={groqKey} onChange={e => { setGroqKey(e.target.value); localStorage.setItem('NEXUS_KEY_GROQ', e.target.value); }} className="bg-black/50 border border-cyan-900 rounded p-2 text-xs outline-none text-white focus:border-cyan-400" placeholder="Inserisci..." />
+                                </div>
                             </div>
+                            <button onClick={() => { setSettings(false); speak("Sincronizzato."); }} className="w-full mt-4 bg-cyan-950/50 border border-cyan-800 text-cyan-400 py-2 rounded-lg font-black text-[10px] uppercase hover:bg-cyan-500 hover:text-black transition-all">Chiudi Console</button>
                         </div>
                     )}
 
@@ -256,55 +292,84 @@
                         </div>
                     )}
 
-                    <div className={`mb-6 p-5 rounded-xl border transition-all shrink-0 ${chrono.overload ? 'alert-card' : 'glass-card'}`}>
-                        <div className="flex justify-between text-[8px] font-black uppercase tracking-[0.3em] text-cyan-900 mb-4">
-                            <span>Status Capacità</span>
-                            <span className={chrono.overload ? 'text-red-500' : 'text-green-500'}>{chrono.overload ? 'SOVRACCARICO' : 'STABILE'}</span>
+                    {/* Dashboard Progress Wheel */}
+                    <div className={`mb-6 p-5 rounded-xl border transition-all shrink-0 flex items-center gap-6 ${chrono.overload ? 'alert-card' : 'glass-card'}`}>
+                        <div className="relative w-16 h-16 shrink-0">
+                            <svg className="w-full h-full" viewBox="0 0 36 36">
+                                <circle className="text-cyan-950" strokeWidth="3" stroke="currentColor" fill="transparent" r="16" cx="18" cy="18"/>
+                                <circle className={`progress-ring ${chrono.overload ? 'text-red-500' : 'text-cyan-400'}`} strokeWidth="3" stroke-dasharray="100, 100" stroke-dashoffset={100 - chrono.percent} strokeLinecap="round" stroke="currentColor" fill="transparent" r="16" cx="18" cy="18"/>
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center text-[8px] font-black">{Math.round(chrono.percent)}%</div>
                         </div>
-                        <div className="flex justify-between items-end">
-                            <div>
-                                <div className="text-[9px] text-cyan-800 font-bold uppercase mb-1">Carico Totale</div>
-                                <div className="text-2xl font-black text-white">{chrono.total > 60 ? `${Math.floor(chrono.total/60)}h ${chrono.total%60}m` : `${chrono.total}m`}</div>
+                        <div className="flex-1">
+                            <div className="flex justify-between text-[8px] font-black uppercase tracking-[0.3em] text-cyan-900 mb-2">
+                                <span>Status {view === "active" ? "Attivo" : "Storico"}</span>
+                                <span className={chrono.overload ? 'text-red-500' : 'text-green-500'}>{chrono.overload ? 'OVERLOAD' : 'NORMAL'}</span>
                             </div>
-                            <div className="text-right">
-                                <div className="text-[9px] text-cyan-800 font-bold uppercase mb-1">ETA Stimato</div>
-                                <div className={`text-2xl font-black ${chrono.overload ? 'text-red-500' : 'text-cyan-400'}`}>{chrono.total ? chrono.finish.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '--:--'}</div>
+                            <div className="flex justify-between items-end">
+                                <div>
+                                    <div className="text-[9px] text-cyan-800 font-bold uppercase">Carico</div>
+                                    <div className="text-xl font-black text-white leading-none">{chrono.total > 60 ? `${Math.floor(chrono.total/60)}h ${chrono.total%60}m` : `${chrono.total}m`}</div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-[9px] text-cyan-800 font-bold uppercase text-right">ETA</div>
+                                    <div className={`text-xl font-black leading-none ${chrono.overload ? 'text-red-500' : 'text-cyan-400'}`}>{chrono.total ? chrono.finish.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '--:--'}</div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto space-y-6 pb-32 relative z-10">
-                        {Object.entries(tasks.reduce((acc, t) => { acc[t.date] = [...(acc[t.date] || []), t]; return acc; }, {})).sort((a,b) => new Date(a[0]) - new Date(b[0])).map(([date, items]) => (
+                    {/* Task Hub */}
+                    <div className="flex-1 overflow-y-auto space-y-6 pb-32 relative z-10 pr-1">
+                        <div className="relative mb-2 shrink-0">
+                            <Icon name="search" size={12} className="absolute left-3 top-2.5 text-cyan-900" />
+                            <input type="text" placeholder={`CERCA NELLO ${view === "active" ? "STATUS" : "STORICO"}...`} value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-black/30 border border-cyan-950 rounded-lg py-2 pl-10 text-[9px] text-cyan-100 uppercase font-bold outline-none focus:border-cyan-400 shadow-inner" />
+                        </div>
+
+                        {Object.entries(filteredTasks.reduce((acc, t) => { acc[t.date] = [...(acc[t.date] || []), t]; return acc; }, {})).sort((a,b) => new Date(a[0]) - new Date(b[0])).map(([date, items]) => (
                             <div key={date} className="fade-in">
                                 <h2 className="text-[8px] font-black uppercase tracking-[0.5em] text-cyan-900 mb-2 border-b border-cyan-950 pb-1">{new Date(date).toLocaleDateString('it-IT',{weekday:'short',day:'numeric',month:'short'})}</h2>
                                 <div className="grid gap-2">
                                     {items.map(t => (
-                                        <div key={t.id} className={`flex items-center justify-between p-4 glass-card rounded-lg transition-all ${t.completed ? 'opacity-20 grayscale' : 'hover:border-cyan-500/50'}`}>
+                                        <div key={t.id} className={`flex items-center justify-between p-4 glass-card rounded-lg transition-all ${t.completed ? 'opacity-40 hover:opacity-100' : 'hover:border-cyan-500/50 hover:bg-cyan-900/5'}`}>
                                             <div className="flex items-center gap-4 flex-1" onClick={() => toggleTask(t)}>
-                                                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${t.completed ? 'bg-cyan-500 border-cyan-500' : 'border-cyan-900'}`}>
+                                                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${t.completed ? 'bg-cyan-500 border-cyan-500 shadow-neon' : 'border-cyan-900'}`}>
                                                     {t.completed && <Icon name="check" size={14} className="text-black" />}
                                                 </div>
                                                 <div>
-                                                    <div className={`text-sm font-bold ${t.completed ? 'line-through text-cyan-900' : 'text-white'}`}>{t.title}</div>
-                                                    <div className="text-[7px] text-cyan-800 font-bold uppercase mt-1">{t.estimatedMinutes} min // {t.priority} priority</div>
+                                                    <div className={`text-sm font-bold ${t.completed ? 'line-through text-cyan-800 italic' : 'text-white'}`}>{t.title}</div>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <span className={`text-[6px] font-black uppercase px-1.5 py-0.5 rounded ${t.priority === 'high' ? 'bg-red-600 text-white shadow-alert' : 'bg-cyan-950 text-cyan-600'}`}>{t.priority}</span>
+                                                        <span className="text-[6px] text-cyan-800 font-bold uppercase">{t.estimatedMinutes} min</span>
+                                                        {t.completedAt && <span className="text-[6px] text-cyan-900 italic">Terminato alle {new Date(t.completedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>}
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <button onClick={() => deleteT(t.id)} className="text-red-900 p-2"><Icon name="trash-2" size={16} /></button>
+                                            <button onClick={() => deleteT(t.id)} className="text-red-900 p-2 hover:text-red-500 transition-colors"><Icon name="trash-2" size={16} /></button>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         ))}
+                        {filteredTasks.length === 0 && (
+                            <div className="text-center py-20 opacity-10 flex flex-col items-center">
+                                <Icon name="inbox" size={48} className="mb-4" />
+                                <p className="text-[10px] font-black uppercase tracking-widest">Memoria {view === "active" ? "Vuota" : "Storica assente"}</p>
+                            </div>
+                        )}
                     </div>
 
+                    {/* Controller Nucleo */}
                     <div className="absolute bottom-0 left-0 right-0 p-6 glass-card border-t border-cyan-950 z-50">
                         <div className="max-w-md mx-auto flex items-center gap-4">
-                            <button onClick={toggleRec} className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all shrink-0 ${recording ? 'active-mic' : 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20'}`}>
-                                <Icon name={recording ? "mic-off" : "mic"} size={24} />
+                            <button onClick={toggleRec} className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all shrink-0 ${recording ? 'active-mic' : 'bg-cyan-500 text-black shadow-[0_0_20px_#00f2ff44] hover:scale-105 active:scale-95'}`}>
+                                <Icon name={recording ? "mic-off" : "mic"} size={26} />
                             </button>
                             <div className="min-w-0 flex-1">
-                                <div className={`text-[8px] font-black uppercase tracking-widest ${recording ? 'text-red-500 animate-pulse' : 'text-cyan-800'}`}>{recording ? "Neural Link Active" : processing ? "AI Computing..." : "Nexus Ready"}</div>
-                                <div className="text-[10px] text-white font-bold truncate italic opacity-80 mt-1">{transcript || "Pronto all'acquisizione vocale..."}</div>
+                                <div className={`text-[8px] font-black uppercase tracking-widest ${recording ? 'text-red-500 animate-pulse' : 'text-cyan-800'}`}>
+                                    {recording ? "Neural Link Active" : processing ? "AI Computing..." : "Nexus Ready"}
+                                </div>
+                                <div className="text-[10px] text-white font-bold truncate italic opacity-80 mt-1">{transcript || `Pronto per lo ${view === "active" ? "status" : "storico"}...`}</div>
                             </div>
                         </div>
                     </div>
