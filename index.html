@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#020204">
+    <title>NEXUS OS // CHRONO-SHADOW</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap');
+        :root { --neon: #00f2ff; --bg: #020204; --panel: rgba(10, 10, 15, 0.95); --alert: #ff0055; }
+        body { background: var(--bg); color: var(--neon); font-family: 'JetBrains Mono', monospace; margin: 0; overflow: hidden; }
+        
+        .cyber-grid {
+            background-image: linear-gradient(var(--neon) 0.5px, transparent 0.5px), linear-gradient(90deg, var(--neon) 0.5px, transparent 0.5px);
+            background-size: 40px 40px; opacity: 0.05; position: fixed; inset: 0; pointer-events: none;
+        }
+
+        .glass-card { background: var(--panel); backdrop-filter: blur(15px); border: 1px solid rgba(0, 242, 255, 0.1); }
+        .alert-card { border-color: rgba(255, 0, 85, 0.5); box-shadow: 0 0 20px rgba(255, 0, 85, 0.1); background: rgba(20, 0, 5, 0.95); }
+        
+        @keyframes pulse-neon { 0%, 100% { box-shadow: 0 0 10px rgba(0, 242, 255, 0.2); } 50% { box-shadow: 0 0 25px rgba(0, 242, 255, 0.5); } }
+        .active-mic { background: var(--alert) !important; animation: pulse-neon 1.5s infinite; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- COMPONENTE ICONA (Risolve Errore React #130) ---
+        // Avvolge l'utilizzo di Lucide CDN in modo sicuro per React
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (ref.current && window.lucide) {
+                    ref.current.innerHTML = `<i data-lucide="${name}"></i>`;
+                    window.lucide.createIcons({
+                        root: ref.current,
+                        attrs: {
+                            class: className,
+                            width: size,
+                            height: size,
+                            stroke: "currentColor"
+                        }
+                    });
+                }
+            }, [name, className, size]);
+            return <span ref={ref} style={{ display: 'contents' }} />;
+        };
+
+        // --- DATABASE LOCALE (IndexedDB) ---
+        const DB_NAME = "NexusLocalDB";
+        const DB_VERSION = 2; // Aggiornato per forzare il refresh
+        const STORE_NAME = "tasks";
+
+        const initDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: "id" });
+                    }
+                };
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject("DB_ERROR");
+            });
+        };
+
+        const App = () => {
+            const [isBooting, setIsBooting] = useState(true);
+            const [tasks, setTasks] = useState([]);
+            const [isRecording, setIsRecording] = useState(false);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [transcript, setTranscript] = useState("");
+            const [search, setSearch] = useState("");
+            const [apiKey, setApiKey] = useState(localStorage.getItem('NEXUS_KEY') || "");
+            const [showSettings, setShowSettings] = useState(false);
+            
+            const dbRef = useRef(null);
+            const recognitionRef = useRef(null);
+
+            // Audio Feedback (Sintesi Vocale)
+            const speak = (msg) => {
+                const u = new SpeechSynthesisUtterance(msg);
+                u.lang = 'it-IT'; u.pitch = 0.7; u.rate = 1.1;
+                window.speechSynthesis.speak(u);
+            };
+
+            // Inizializzazione
+            useEffect(() => {
+                const start = async () => {
+                    try {
+                        dbRef.current = await initDB();
+                        await loadTasks();
+                        setTimeout(() => setIsBooting(false), 1500);
+                    } catch (e) { console.error(e); }
+                };
+                start();
+
+                const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (Speech) {
+                    recognitionRef.current = new Speech();
+                    recognitionRef.current.continuous = true;
+                    recognitionRef.current.interimResults = true;
+                    recognitionRef.current.lang = 'it-IT';
+                    recognitionRef.current.onresult = (e) => {
+                        let t = "";
+                        for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
+                        setTranscript(t);
+                    };
+                }
+            }, []);
+
+            const loadTasks = () => {
+                return new Promise((resolve) => {
+                    const tx = dbRef.current.transaction(STORE_NAME, "readonly");
+                    const store = tx.objectStore(STORE_NAME);
+                    const req = store.getAll();
+                    req.onsuccess = () => {
+                        const data = req.result.sort((a,b) => new Date(a.date) - new Date(b.date));
+                        setTasks(data);
+                        resolve();
+                    };
+                });
+            };
+
+            const saveTask = async (taskData) => {
+                const tx = dbRef.current.transaction(STORE_NAME, "readwrite");
+                const store = tx.objectStore(STORE_NAME);
+                store.put(taskData);
+                await loadTasks();
+            };
+
+            const toggleTask = async (task) => {
+                await saveTask({ ...task, completed: !task.completed });
+            };
+
+            const deleteTask = async (id) => {
+                const tx = dbRef.current.transaction(STORE_NAME, "readwrite");
+                const store = tx.objectStore(STORE_NAME);
+                store.delete(id);
+                await loadTasks();
+            };
+
+            // INTELLIGENZA ARTIFICIALE + STIMA TEMPI
+            const processAI = async (text) => {
+                if (!apiKey) { speak("Chiave API mancante."); setShowSettings(true); return; }
+                setIsProcessing(true);
+                speak("Analisi neurale in corso.");
+
+                const todayStr = new Date().toISOString().split('T')[0];
+                const prompt = `Sei un analista di produttività. Estrai i task dalla frase: "${text}". Data odierna: ${todayStr}.
+                REGOLE CRITICHE:
+                1. Estrai il titolo dell'azione.
+                2. Data: se l'utente dice 'oggi' o non specifica, usa ${todayStr}.
+                3. estimatedMinutes: NUMERO INTERO di minuti. Se l'utente specifica il tempo, usalo. Se NON lo specifica, STIMA TU il tempo logico necessario per quell'azione (es. 'chiamare marco' = 10, 'fare la spesa' = 60).
+                4. priority: high/med/low.
+                Restituisci SOLO un array JSON: [{"title": "...", "date": "YYYY-MM-DD", "priority": "high", "estimatedMinutes": 45, "subtasks": []}]`;
+                
+                try {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+                    });
+                    const data = await res.json();
+                    const newItems = JSON.parse(data.candidates[0].content.parts[0].text);
+                    
+                    for (const item of newItems) {
+                        // Fallback se l'IA non restituisce minuti
+                        const mins = item.estimatedMinutes ? parseInt(item.estimatedMinutes) : 30;
+                        await saveTask({ ...item, estimatedMinutes: mins, id: crypto.randomUUID(), completed: false, created: Date.now() });
+                    }
+                    speak("Task registrati. Parametri temporali calcolati.");
+                } catch (e) { 
+                    speak("Errore di elaborazione. Riprovare.");
+                } finally { setIsProcessing(false); setTranscript(""); }
+            };
+
+            const toggleRecording = () => {
+                if (isRecording) {
+                    setIsRecording(false); recognitionRef.current.stop();
+                    if (transcript.trim()) processAI(transcript);
+                } else {
+                    setTranscript(""); setIsRecording(true);
+                    recognitionRef.current.start();
+                    speak("In ascolto.");
+                }
+            };
+
+            // CHRONO ENGINE: Calcolo Fattibilità Odierna
+            const chronoAnalysis = useMemo(() => {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const todayTasks = tasks.filter(t => t.date === todayStr && !t.completed);
+                
+                const totalMinsNeeded = todayTasks.reduce((acc, t) => acc + (t.estimatedMinutes || 30), 0);
+                
+                const now = new Date();
+                const endOfDay = new Date();
+                endOfDay.setHours(23, 0, 0, 0); // Giornata finisce alle 23:00
+                
+                const minsRemaining = Math.max(0, Math.floor((endOfDay - now) / 60000));
+                const estimatedFinishTime = new Date(now.getTime() + totalMinsNeeded * 60000);
+                
+                const isOverload = totalMinsNeeded > minsRemaining;
+                
+                return { totalMinsNeeded, minsRemaining, estimatedFinishTime, isOverload, taskCount: todayTasks.length };
+            }, [tasks]);
+
+            // Utility formattazione tempo (es. 90 -> "1h 30m")
+            const formatTime = (mins) => {
+                if (!mins) return "30m";
+                const h = Math.floor(mins / 60);
+                const m = mins % 60;
+                return h > 0 ? `${h}h ${m > 0 ? m+'m' : ''}` : `${m}m`;
+            };
+
+            if (isBooting) {
+                return (
+                    <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center">
+                        <Icon name="hourglass" className="text-cyan-400 w-12 h-12 animate-spin-slow mb-6" />
+                        <h2 className="text-xs font-black tracking-[0.5em] text-cyan-500">CHRONO_CORE_INIT</h2>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 pb-36 overflow-y-auto">
+                    <div className="cyber-grid"></div>
+
+                    {/* Header */}
+                    <nav className="flex justify-between items-center mb-6 relative z-10 border-b border-cyan-900/30 pb-4">
+                        <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 glass-card rounded-lg flex items-center justify-center border border-cyan-500/20">
+                                <Icon name="shield-check" className="text-cyan-400 w-5 h-5" />
+                            </div>
+                            <div>
+                                <h1 className="text-lg font-black text-white italic tracking-tighter uppercase">Nexus<span className="text-cyan-400">Local</span></h1>
+                                <div className="text-[8px] font-bold text-cyan-800 tracking-[0.3em] uppercase">Chrono-Shadow v5.0</div>
+                            </div>
+                        </div>
+                        <button onClick={() => setShowSettings(!showSettings)} className={`p-2 glass-card rounded-full transition-all ${showSettings ? 'text-white border-cyan-400' : 'text-cyan-700'}`}>
+                            <Icon name="settings" size={18} />
+                        </button>
+                    </nav>
+
+                    {showSettings && (
+                        <div className="mb-8 glass-card p-6 rounded-2xl border-l-4 border-cyan-500 relative z-20">
+                            <label className="text-[9px] font-bold block mb-1 text-cyan-800 uppercase">Google AI API Key</label>
+                            <input 
+                                type="password" value={apiKey} 
+                                onChange={e => { setApiKey(e.target.value); localStorage.setItem('NEXUS_KEY', e.target.value); }}
+                                className="w-full bg-black/50 border border-cyan-900 rounded-lg p-3 text-xs focus:border-cyan-400 outline-none"
+                                placeholder="Incolla API Key..."
+                            />
+                        </div>
+                    )}
+
+                    {/* THE ORACLE: Load Analyzer Dashboard */}
+                    <div className={`mb-8 p-5 rounded-2xl relative z-10 transition-all border ${chronoAnalysis.isOverload ? 'alert-card' : 'glass-card'}`}>
+                        <div className="flex justify-between items-start mb-4">
+                            <div className="flex items-center gap-2">
+                                {chronoAnalysis.isOverload ? 
+                                    <Icon name="alert-triangle" className="text-[#ff0055] w-5 h-5 animate-pulse" /> : 
+                                    <Icon name="check" className="text-cyan-400 w-5 h-5" />
+                                }
+                                <h2 className={`text-[10px] font-black uppercase tracking-widest ${chronoAnalysis.isOverload ? 'text-[#ff0055]' : 'text-cyan-500'}`}>
+                                    {chronoAnalysis.isOverload ? 'SOVRACCARICO CRITICO RILEVATO' : 'CAPACITÀ GIORNALIERA OTTIMALE'}
+                                </h2>
+                            </div>
+                            <Icon name="clock" className={`w-4 h-4 ${chronoAnalysis.isOverload ? 'text-[#ff0055]' : 'text-cyan-800'}`} />
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <div className="text-[9px] text-cyan-800 uppercase font-bold mb-1">Carico Odierno Stimato</div>
+                                <div className="text-2xl font-black text-white">{formatTime(chronoAnalysis.totalMinsNeeded)}</div>
+                            </div>
+                            <div>
+                                <div className="text-[9px] text-cyan-800 uppercase font-bold mb-1">Fine Lavori Prevista</div>
+                                <div className={`text-2xl font-black ${chronoAnalysis.isOverload ? 'text-[#ff0055]' : 'text-cyan-400'}`}>
+                                    {chronoAnalysis.totalMinsNeeded === 0 ? '--:--' : chronoAnalysis.estimatedFinishTime.toLocaleTimeString('it-IT', {hour: '2-digit', minute:'2-digit'})}
+                                </div>
+                            </div>
+                        </div>
+
+                        {chronoAnalysis.isOverload && (
+                            <div className="mt-4 text-[9px] text-[#ff0055] bg-[#ff0055]/10 p-2 rounded border border-[#ff0055]/30 uppercase tracking-widest font-bold">
+                                ATTENZIONE: Il tempo richiesto ({formatTime(chronoAnalysis.totalMinsNeeded)}) supera il tempo fisico rimanente fino alle 23:00 ({formatTime(chronoAnalysis.minsRemaining)}). Riprogrammare le priorità.
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Task Display */}
+                    <div className="space-y-8 relative z-10">
+                        {Object.entries(
+                            tasks.filter(t => t.title.toLowerCase().includes(search.toLowerCase()))
+                            .reduce((acc, t) => { acc[t.date] = [...(acc[t.date] || []), t]; return acc; }, {})
+                        ).sort((a,b) => new Date(a[0]) - new Date(b[0])).map(([date, items]) => {
+                            const dateTotalMins = items.filter(t => !t.completed).reduce((sum, t) => sum + (t.estimatedMinutes || 0), 0);
+                            
+                            return (
+                                <div key={date} className="animate-in fade-in slide-in-from-bottom-2">
+                                    <div className="flex items-center justify-between mb-4 border-b border-cyan-900/30 pb-2">
+                                        <div className="flex items-center gap-2">
+                                            <Icon name="calendar" size={14} className="text-cyan-900" />
+                                            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-600">
+                                                {new Date(date).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' })}
+                                            </h2>
+                                        </div>
+                                        <span className="text-[9px] text-cyan-800 font-bold tracking-widest uppercase">TOTALE: {formatTime(dateTotalMins)}</span>
+                                    </div>
+
+                                    <div className="grid gap-3">
+                                        {items.map(t => (
+                                            <div key={t.id} className={`group glass-card rounded-xl border transition-all ${t.completed ? 'opacity-30 scale-[0.98]' : 'hover:border-cyan-400'}`}>
+                                                <div className="flex items-center justify-between p-4">
+                                                    <div className="flex items-center gap-4 flex-1">
+                                                        <button onClick={() => toggleTask(t)}>
+                                                            {t.completed ? 
+                                                                <Icon name="check-circle" size={22} className="text-cyan-500" /> : 
+                                                                <Icon name="circle" size={22} className="text-cyan-900 group-hover:text-cyan-400" />
+                                                            }
+                                                        </button>
+                                                        <div>
+                                                            <div className={`text-sm font-bold tracking-tight ${t.completed ? 'line-through text-cyan-900' : 'text-white'}`}>{t.title}</div>
+                                                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                                                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded flex items-center gap-1 ${t.priority === 'high' ? 'bg-[#ff0055] text-white' : 'bg-cyan-950 text-cyan-600'}`}>
+                                                                    {t.priority}
+                                                                </span>
+                                                                <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-400 flex items-center gap-1">
+                                                                    <Icon name="clock" size={8} /> {formatTime(t.estimatedMinutes)}
+                                                                </span>
+                                                                {t.subtasks?.length > 0 && <span className="text-[8px] font-bold text-cyan-800 uppercase">+{t.subtasks.length} sub</span>}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => deleteTask(t.id)} className="text-[#ff0055] opacity-50 hover:opacity-100 p-2">
+                                                        <Icon name="trash-2" size={16} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* Controller Inferiore */}
+                    <div className="fixed bottom-8 left-0 right-0 px-6 flex justify-center z-50">
+                        <div className="glass-card p-2 rounded-full border border-cyan-500/20 flex items-center gap-4 shadow-[0_20px_60px_rgba(0,0,0,0.9)] pr-6">
+                            <button 
+                                onClick={toggleRecording}
+                                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all ${isRecording ? 'active-mic' : 'bg-cyan-500 text-black hover:bg-cyan-400 shadow-[0_0_20px_rgba(0,242,255,0.4)]'}`}
+                            >
+                                {isRecording ? <Icon name="mic-off" size={24} /> : <Icon name="mic" size={24} />}
+                            </button>
+                            <div className="flex flex-col min-w-[130px]">
+                                <span className={`text-[10px] font-black uppercase tracking-widest ${isRecording ? 'text-[#ff0055] animate-pulse' : 'text-cyan-500'}`}>
+                                    {isRecording ? "Neural Capture" : isProcessing ? "AI Matrix Calc..." : "Local Audio Link"}
+                                </span>
+                                <span className="text-[8px] text-cyan-900 font-bold truncate max-w-[150px]">
+                                    {transcript || (isProcessing ? "Stima tempi in corso..." : "Pronto per l'input")}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
